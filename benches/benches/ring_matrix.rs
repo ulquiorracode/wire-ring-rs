@@ -88,6 +88,18 @@ fn bench_ring_matrix_throughput(c: &mut Criterion) {
                 r_grant.release(size);
             });
         });
+
+        // 5. bytes::BytesMut (Standard Tokio / Async Network Pattern)
+        group.bench_function(BenchmarkId::new("bytes-mut", size), |b| {
+            let mut buf = bytes::BytesMut::with_capacity(ring_cap);
+            let payload = vec![0x5Au8; size];
+
+            b.iter(|| {
+                buf.extend_from_slice(black_box(&payload));
+                let read_view = buf.split_to(size);
+                black_box(&read_view[..]);
+            });
+        });
     }
 
     group.finish();

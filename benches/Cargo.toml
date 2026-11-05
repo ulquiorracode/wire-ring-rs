@@ -12,6 +12,7 @@ wire-ring = { workspace = true, features = ["std"] }
 criterion = { workspace = true }
 rtrb = { workspace = true }
 bbqueue = { workspace = true }
+bytes = { workspace = true }
 
 [[bench]]
 name = "ring_matrix"
