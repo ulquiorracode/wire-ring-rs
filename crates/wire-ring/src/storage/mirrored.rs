@@ -121,16 +121,21 @@ mod windows_impl {
             return Err(MemoryError::InvalidCapacity(capacity));
         }
 
+        // SAFETY: Win32 VirtualAlloc2, MapViewOfFile3, and CreateFileMappingA are invoked with verified
+        // 64KiB-aligned power-of-two sizes and strict error checks. All allocated placeholders and views
+        // are properly cleaned up on any error path.
         unsafe {
             let process = GetCurrentProcess();
 
             // 1. Create page-file-backed anonymous file mapping of size C
+            let size_high = (capacity >> 32) as u32;
+            let size_low = (capacity & 0xFFFF_FFFF) as u32;
             let mapping = CreateFileMappingA(
                 INVALID_HANDLE_VALUE,
                 ptr::null_mut(),
                 PAGE_READWRITE,
-                0,
-                capacity as u32,
+                size_high,
+                size_low,
                 ptr::null(),
             );
             if mapping.is_null() {
@@ -182,6 +187,8 @@ mod windows_impl {
                 let err = GetLastError();
                 CloseHandle(mapping);
                 VirtualFree(placeholder, 0, MEM_RELEASE);
+                let target2 = (placeholder as usize + capacity) as *mut c_void;
+                VirtualFree(target2, 0, MEM_RELEASE);
                 return Err(MemoryError::OsError(err));
             }
 
@@ -217,6 +224,8 @@ mod windows_impl {
     }
 
     pub fn deallocate_mirrored(storage: &mut MirroredStorage) {
+        // SAFETY: The mapping handles and virtual views were validly allocated during new()
+        // and are safe to unmap and close in LIFO order upon drop.
         unsafe {
             let view1 = storage.ptr as *const c_void;
             let view2 = (storage.ptr as usize + storage.capacity) as *const c_void;
@@ -245,7 +254,7 @@ mod linux_impl {
     const MFD_CLOEXEC: u32 = 0x0001;
 
     unsafe extern "C" {
-        fn memfd_create(name: *const i8, flags: u32) -> i32;
+        fn memfd_create(name: *const core::ffi::c_char, flags: u32) -> i32;
         fn ftruncate(fd: i32, length: i64) -> i32;
         fn mmap(
             addr: *mut c_void,
@@ -266,6 +275,9 @@ mod linux_impl {
             return Err(MemoryError::InvalidCapacity(capacity));
         }
 
+        // SAFETY: memfd_create, ftruncate, and mmap are called with valid page-aligned parameters
+        // and error checked. If any intermediate step fails, all allocated anonymous address space
+        // and open descriptors are immediately unmapped and closed.
         unsafe {
             let name = c"wire_ring_mirrored".as_ptr();
             let fd = memfd_create(name, MFD_CLOEXEC);
@@ -324,7 +336,6 @@ mod linux_impl {
             );
             if view2 == MAP_FAILED {
                 let err = std::io::Error::last_os_error().raw_os_error().unwrap_or(1) as u32;
-                munmap(view1, capacity);
                 munmap(anon_addr, 2 * capacity);
                 close(fd);
                 return Err(MemoryError::OsError(err));
@@ -341,6 +352,8 @@ mod linux_impl {
     }
 
     pub fn deallocate_mirrored(storage: &mut MirroredStorage) {
+        // SAFETY: The storage was mapped across 2*capacity contiguous virtual address space
+        // and is safe to unmap in full on drop.
         unsafe {
             munmap(storage.ptr as *mut c_void, 2 * storage.capacity);
         }

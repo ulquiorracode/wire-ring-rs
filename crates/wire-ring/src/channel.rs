@@ -2,14 +2,18 @@
 
 use crate::grant::{ReadGrant, WriteGrant};
 use crate::storage::StorageBackend;
+use core::cell::UnsafeCell;
 use core::sync::atomic::Ordering;
 use std::sync::Arc;
 use wire_ring_core::SequenceController;
 
 struct SharedRing<S> {
-    storage: S,
+    storage: UnsafeCell<S>,
     sequence: SequenceController,
 }
+
+// SAFETY: Synchronization of non-overlapping read/write slices is enforced via SequenceController (SPSC Acquire/Release).
+unsafe impl<S: StorageBackend + Send> Sync for SharedRing<S> {}
 
 /// Producer half of the ring buffer.
 pub struct Producer<S> {
@@ -31,21 +35,20 @@ impl<S: StorageBackend> Producer<S> {
     #[inline]
     pub fn available_write(&mut self) -> usize {
         let head = self.shared.sequence.load_head(Ordering::Relaxed);
+        let tail = self.shared.sequence.load_tail(Ordering::Acquire);
+        self.cached_tail = tail;
         let cap = self.shared.sequence.capacity();
-        let free = SequenceController::available_write_from(cap, head, self.cached_tail);
-        if free == 0 {
-            // Refresh shadow tail from consumer
-            self.cached_tail = self.shared.sequence.load_tail(Ordering::Acquire);
-            SequenceController::available_write_from(cap, head, self.cached_tail)
-        } else {
-            free
-        }
+        SequenceController::available_write_from(cap, head, tail)
     }
 
     /// Leases a contiguous mutable slice of bytes for zero-copy writing.
     ///
     /// If backed by `MirroredStorage`, the granted slice is NEVER truncated at the ring wrap-around boundary.
     pub fn grant(&mut self, requested: usize) -> Option<WriteGrant<'_>> {
+        if requested == 0 {
+            return Some(WriteGrant::new(&mut [], &self.shared.sequence));
+        }
+
         let cap = self.shared.sequence.capacity();
         let head = self.shared.sequence.load_head(Ordering::Relaxed);
 
@@ -63,7 +66,7 @@ impl<S: StorageBackend> Producer<S> {
         let head_idx = self.shared.sequence.index_of(head);
 
         // If not mirrored, we must bound to end of physical buffer
-        let contiguous_len = if self.shared.storage.is_mirrored() {
+        let contiguous_len = if unsafe { (*self.shared.storage.get()).is_mirrored() } {
             grant_len
         } else {
             grant_len.min(cap - head_idx)
@@ -74,9 +77,9 @@ impl<S: StorageBackend> Producer<S> {
         }
 
         // SAFETY: The producer uniquely writes to [head .. head + contiguous_len].
-        // The consumer has already committed past this region with Acquire/Release synchronization.
+        // Storage is held in an UnsafeCell and the consumer has committed past this region with Acquire/Release.
         let slice = unsafe {
-            let base = self.shared.storage.as_ptr() as *mut u8;
+            let base = (*self.shared.storage.get()).as_mut_ptr();
             core::slice::from_raw_parts_mut(base.add(head_idx), contiguous_len)
         };
 
@@ -122,9 +125,9 @@ impl<S: StorageBackend> Consumer<S> {
     #[inline]
     pub fn available_read(&mut self) -> usize {
         let tail = self.shared.sequence.load_tail(Ordering::Relaxed);
-        let current_head = self.shared.sequence.load_head(Ordering::Acquire);
-        self.cached_head = current_head;
-        SequenceController::available_read_from(current_head, tail)
+        let head = self.shared.sequence.load_head(Ordering::Acquire);
+        self.cached_head = head;
+        SequenceController::available_read_from(head, tail)
     }
 
     /// Leases a contiguous slice of committed bytes for zero-copy reading.
@@ -132,9 +135,12 @@ impl<S: StorageBackend> Consumer<S> {
     /// If backed by `MirroredStorage`, the granted slice is NEVER truncated at the ring wrap-around boundary.
     pub fn grant(&mut self) -> Option<ReadGrant<'_>> {
         let tail = self.shared.sequence.load_tail(Ordering::Relaxed);
-        let current_head = self.shared.sequence.load_head(Ordering::Acquire);
-        self.cached_head = current_head;
-        let available = SequenceController::available_read_from(current_head, tail);
+
+        let mut available = SequenceController::available_read_from(self.cached_head, tail);
+        if available == 0 {
+            self.cached_head = self.shared.sequence.load_head(Ordering::Acquire);
+            available = SequenceController::available_read_from(self.cached_head, tail);
+        }
 
         if available == 0 {
             return None;
@@ -143,8 +149,8 @@ impl<S: StorageBackend> Consumer<S> {
         let cap = self.shared.sequence.capacity();
         let tail_idx = self.shared.sequence.index_of(tail);
 
-        let contiguous_len = if self.shared.storage.is_mirrored() {
-            available
+        let contiguous_len = if unsafe { (*self.shared.storage.get()).is_mirrored() } {
+            available.min(cap)
         } else {
             available.min(cap - tail_idx)
         };
@@ -154,9 +160,9 @@ impl<S: StorageBackend> Consumer<S> {
         }
 
         // SAFETY: The consumer uniquely reads from [tail .. tail + contiguous_len].
-        // The producer has committed these bytes with Release ordering before updating head.
+        // Storage is accessed via UnsafeCell and producer has committed bytes with Release ordering.
         let slice = unsafe {
-            let base = self.shared.storage.as_ptr();
+            let base = (*self.shared.storage.get()).as_ptr();
             core::slice::from_raw_parts(base.add(tail_idx), contiguous_len)
         };
 
@@ -186,7 +192,7 @@ impl<S: StorageBackend> Consumer<S> {
 pub fn split_ring<S: StorageBackend>(storage: S) -> (Producer<S>, Consumer<S>) {
     let capacity = storage.capacity();
     let shared = Arc::new(SharedRing {
-        storage,
+        storage: UnsafeCell::new(storage),
         sequence: SequenceController::new(capacity),
     });
 
