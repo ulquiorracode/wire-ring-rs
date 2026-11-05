@@ -25,6 +25,7 @@ criterion = { version = "0.8", default-features = false }
 crc32fast = { version = "1.4", default-features = false }
 rtrb = "0.3"
 bbqueue = "0.5"
+bytes = "1.10"
 
 [profile.release]
 opt-level = 3
