@@ -10,7 +10,9 @@ publish = false
 [dependencies]
 wire-ring = { workspace = true, features = ["std"] }
 criterion = { workspace = true }
+rtrb = { workspace = true }
+bbqueue = { workspace = true }
 
 [[bench]]
-name = "ring_throughput"
+name = "ring_matrix"
 harness = false

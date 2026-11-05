@@ -1,4 +1,9 @@
+use crc32fast::Hasher;
+use std::panic::{AssertUnwindSafe, catch_unwind};
+use std::sync::Arc;
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::thread;
+use std::time::Duration;
 use wire_ring::Ring;
 
 #[test]
@@ -19,35 +24,26 @@ fn test_heap_ring_write_read() {
 
 #[test]
 fn test_mirrored_ring_contiguous_boundary_lease() {
-    // 64 KiB page-aligned
     let (mut tx, mut rx) = Ring::network_default(64 * 1024).expect("build mirrored ring");
     let cap = tx.capacity();
 
-    // 1. Advance head close to the end of physical boundary: cap - 16 bytes
     let prefill = cap - 16;
     let dummy = vec![0xAAu8; prefill];
     assert_eq!(tx.write_slice(&dummy), prefill);
 
-    // Consume all prefill
     let mut consume_dummy = vec![0u8; prefill];
     assert_eq!(rx.read_slice(&mut consume_dummy), prefill);
 
-    // 2. Head is now at cap - 16.
-    // Request a grant of 32 bytes!
-    // In a normal ring, grant() would be truncated to 16 bytes (the end of the physical buffer).
-    // In our Mirrored ring, grant() MUST return the full 32 bytes as a SINGLE CONTIGUOUS SLICE!
     {
         let mut grant = tx.grant(32).expect("grant across boundary");
         assert_eq!(grant.len(), 32);
 
-        // Write 32 bytes spanning across the wrap-around boundary
         for (i, b) in grant.iter_mut().enumerate() {
             *b = (i + 1) as u8;
         }
         grant.commit(32);
     }
 
-    // 3. Consumer reads the cross-boundary slice
     {
         let grant = rx.grant().expect("read grant across boundary");
         assert_eq!(grant.len(), 32);
@@ -59,73 +55,217 @@ fn test_mirrored_ring_contiguous_boundary_lease() {
 }
 
 #[test]
-fn test_grant_auto_rollback_on_drop() {
-    let (mut tx, mut rx) = Ring::heap(512).expect("heap ring");
+fn test_exact_capacity_saturation_and_zero_space() {
+    let (mut tx, mut rx) = Ring::network_default(64 * 1024).expect("mirrored ring");
+    let cap = tx.capacity();
 
-    // Producer gets a lease but drops it without committing
-    {
-        let mut grant = tx.grant(128).expect("grant lease");
-        grant[0] = 42;
-        // Dropped without .commit()
-    }
-
-    // Consumer should see 0 readable bytes because grant was rolled back!
+    assert_eq!(tx.available_write(), cap);
     assert_eq!(rx.available_read(), 0);
-    assert!(rx.grant().is_none());
+
+    // 1. Fill exactly to 100% capacity
+    let full_buf = vec![0x5Au8; cap];
+    assert_eq!(tx.write_slice(&full_buf), cap);
+
+    // 2. Further write grants MUST return None or 0 available
+    assert_eq!(tx.available_write(), 0);
+    assert!(tx.grant(1).is_none());
+    assert_eq!(tx.write_slice(b"overflow"), 0);
+
+    // 3. Consumer sees exactly full capacity
+    assert_eq!(rx.available_read(), cap);
+    let mut read_buf = vec![0u8; cap];
+    assert_eq!(rx.read_slice(&mut read_buf), cap);
+    assert_eq!(read_buf, full_buf);
+
+    // 4. Now ring is empty again
+    assert_eq!(rx.available_read(), 0);
+    assert_eq!(tx.available_write(), cap);
 }
 
 #[test]
-fn test_spsc_threaded_streaming_integrity() {
+fn test_partial_commit_incremental_alignment() {
     let (mut tx, mut rx) = Ring::network_default(64 * 1024).expect("mirrored ring");
 
-    const TOTAL_MESSAGES: usize = 100_000;
-    const MSG_SIZE: usize = 64;
+    // Producer requests 1024 bytes, but commits in increments: 100, then 200, then 50
+    {
+        let mut grant = tx.grant(1024).expect("grant 1024");
+        grant[..100].fill(0x11);
+        grant.commit(100);
+    }
+    assert_eq!(rx.available_read(), 100);
 
-    let producer_handle = thread::spawn(move || {
-        let mut msg = [0u8; MSG_SIZE];
-        for i in 0..TOTAL_MESSAGES {
-            msg[0..8].copy_from_slice(&(i as u64).to_le_bytes());
-            msg[8..16].copy_from_slice(&(i as u64 ^ 0xDEADBEEFCAFE).to_le_bytes());
+    {
+        let mut grant = tx.grant(1024).expect("grant 1024");
+        grant[..200].fill(0x22);
+        grant.commit(200);
+    }
+    assert_eq!(rx.available_read(), 300);
 
-            loop {
-                if let Some(mut grant) = tx.grant(MSG_SIZE) {
-                    if grant.len() >= MSG_SIZE {
-                        grant[..MSG_SIZE].copy_from_slice(&msg);
-                        grant.commit(MSG_SIZE);
+    {
+        let mut grant = tx.grant(1024).expect("grant 1024");
+        grant[..50].fill(0x33);
+        grant.commit(50);
+    }
+    assert_eq!(rx.available_read(), 350);
+
+    // Consumer reads in non-aligned chunks
+    let mut part1 = [0u8; 50];
+    assert_eq!(rx.read_slice(&mut part1), 50);
+    assert!(part1.iter().all(|&b| b == 0x11));
+
+    let mut part2 = [0u8; 100];
+    assert_eq!(rx.read_slice(&mut part2), 100);
+    assert!(part2[..50].iter().all(|&b| b == 0x11));
+    assert!(part2[50..].iter().all(|&b| b == 0x22));
+
+    let mut remaining = [0u8; 200];
+    assert_eq!(rx.read_slice(&mut remaining), 200);
+    assert!(remaining[..150].iter().all(|&b| b == 0x22));
+    assert!(remaining[150..200].iter().all(|&b| b == 0x33));
+
+    assert_eq!(rx.available_read(), 0);
+}
+
+#[test]
+fn test_cross_boundary_fuzzing_with_crc32() {
+    let (mut tx, mut rx) = Ring::network_default(64 * 1024).expect("mirrored ring");
+
+    // Pseudorandom packet generation (LFSR) with CRC32 verification across boundaries
+    let mut lfsr: u32 = 0xACE1;
+    let mut next_rand = || -> u32 {
+        lfsr = (lfsr >> 1) ^ (-((lfsr & 1) as i32) as u32 & 0xB400);
+        lfsr
+    };
+
+    const ITERATIONS: usize = 20_000;
+    for _ in 0..ITERATIONS {
+        let size = ((next_rand() as usize) % 1024) + 1; // 1 to 1024 bytes
+        let mut data = vec![0u8; size + 4]; // payload + crc32
+
+        // Fill payload
+        for b in &mut data[..size] {
+            *b = (next_rand() & 0xFF) as u8;
+        }
+
+        // Compute CRC32
+        let mut hasher = Hasher::new();
+        hasher.update(&data[..size]);
+        let crc = hasher.finalize();
+        data[size..size + 4].copy_from_slice(&crc.to_le_bytes());
+
+        // Write
+        loop {
+            if let Some(mut grant) = tx.grant(data.len()) {
+                if grant.len() >= data.len() {
+                    grant[..data.len()].copy_from_slice(&data);
+                    grant.commit(data.len());
+                    break;
+                }
+            }
+            // Drain some if full
+            let drain_grant = rx.grant().expect("must drain");
+            drain_grant.commit_all();
+        }
+
+        // Read and verify
+        let read_grant = rx.grant().expect("must have data");
+        assert!(read_grant.len() >= data.len());
+        let read_slice = &read_grant[..data.len()];
+
+        let mut read_hasher = Hasher::new();
+        read_hasher.update(&read_slice[..size]);
+        let actual_crc = read_hasher.finalize();
+        let expected_crc = u32::from_le_bytes(read_slice[size..size + 4].try_into().unwrap());
+        assert_eq!(
+            actual_crc, expected_crc,
+            "CRC32 parity violation across ring boundary!"
+        );
+
+        read_grant.commit(data.len());
+    }
+}
+
+#[test]
+fn test_panic_rollback_under_concurrent_pressure() {
+    let (mut tx, mut rx) = Ring::network_default(64 * 1024).expect("mirrored ring");
+
+    // Verify panic inside producer grant does NOT corrupt ring state or advance head
+    for i in 0..100 {
+        let _ = catch_unwind(AssertUnwindSafe(|| {
+            let mut grant = tx.grant(512).unwrap();
+            grant[0..4].copy_from_slice(&(i as u32).to_le_bytes());
+            if i % 2 == 0 {
+                panic!("Simulated worker panic inside grant!");
+            }
+            grant.commit(512);
+        }));
+    }
+
+    // Exactly 50 odd packets (50 * 512 = 25600 bytes) must have survived cleanly
+    assert_eq!(rx.available_read(), 50 * 512);
+    let mut total_read = 0;
+    while total_read < 50 * 512 {
+        let grant = rx.grant().unwrap();
+        let chunk = grant.len().min(512);
+        grant.commit(chunk);
+        total_read += chunk;
+    }
+    assert_eq!(rx.available_read(), 0);
+}
+
+#[test]
+fn test_asymmetric_burst_traffic() {
+    let (mut tx, mut rx) = Ring::network_default(64 * 1024).expect("mirrored ring");
+    let done = Arc::new(AtomicBool::new(false));
+
+    let done_tx = Arc::clone(&done);
+    let producer = thread::spawn(move || {
+        // Burst 20 packets of 1 KB, then sleep 1 ms
+        for burst in 0..200 {
+            for p in 0..20 {
+                let val = ((burst * 20 + p) as u8) ^ 0xA5;
+                let payload = [val; 1024];
+                loop {
+                    if let Some(mut grant) = tx.grant(1024) {
+                        grant[..1024].copy_from_slice(&payload);
+                        grant.commit(1024);
                         break;
                     }
+                    thread::yield_now();
                 }
-                thread::yield_now();
+            }
+            if burst % 10 == 0 {
+                thread::sleep(Duration::from_millis(1));
             }
         }
+        done_tx.store(true, Ordering::Release);
     });
 
-    let consumer_handle = thread::spawn(move || {
-        let mut received = 0;
-        let mut expected_seq = 0u64;
+    let consumer = thread::spawn(move || {
+        let mut total_received = 0;
+        let mut expected_idx = 0;
 
-        while received < TOTAL_MESSAGES {
+        while !done.load(Ordering::Acquire) || rx.available_read() > 0 {
             if let Some(grant) = rx.grant() {
                 let mut offset = 0;
-                while offset + MSG_SIZE <= grant.len() {
-                    let chunk = &grant[offset..offset + MSG_SIZE];
-                    let seq = u64::from_le_bytes(chunk[0..8].try_into().unwrap());
-                    let hash = u64::from_le_bytes(chunk[8..16].try_into().unwrap());
+                while offset + 1024 <= grant.len() {
+                    let chunk = &grant[offset..offset + 1024];
+                    let expected_val = (expected_idx as u8) ^ 0xA5;
+                    assert_eq!(chunk[0], expected_val);
+                    assert_eq!(chunk[1023], expected_val);
 
-                    assert_eq!(seq, expected_seq);
-                    assert_eq!(hash, expected_seq ^ 0xDEADBEEFCAFE);
-
-                    expected_seq += 1;
-                    received += 1;
-                    offset += MSG_SIZE;
+                    expected_idx += 1;
+                    total_received += 1;
+                    offset += 1024;
                 }
                 grant.commit(offset);
             } else {
                 thread::yield_now();
             }
         }
+        assert_eq!(total_received, 4000);
     });
 
-    producer_handle.join().expect("producer thread");
-    consumer_handle.join().expect("consumer thread");
+    producer.join().unwrap();
+    consumer.join().unwrap();
 }

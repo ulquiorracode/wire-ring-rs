@@ -12,6 +12,9 @@ description = "Ultra-high performance, zero-allocation virtual mirrored ring buf
 wire-ring-core = { workspace = true }
 zerocopy = { workspace = true, optional = true }
 
+[dev-dependencies]
+crc32fast = { workspace = true }
+
 [features]
 default = ["std"]
 std = ["wire-ring-core/alloc"]

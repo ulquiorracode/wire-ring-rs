@@ -80,11 +80,7 @@ impl<S: StorageBackend> Producer<S> {
             core::slice::from_raw_parts_mut(base.add(head_idx), contiguous_len)
         };
 
-        let seq_ref = &self.shared.sequence;
-        Some(WriteGrant::new(slice, move |committed| {
-            let cur = seq_ref.load_head(Ordering::Relaxed);
-            seq_ref.store_head(cur.wrapping_add(committed), Ordering::Release);
-        }))
+        Some(WriteGrant::new(slice, &self.shared.sequence))
     }
 
     /// Writes the entire `src` slice into the ring buffer.
@@ -126,14 +122,9 @@ impl<S: StorageBackend> Consumer<S> {
     #[inline]
     pub fn available_read(&mut self) -> usize {
         let tail = self.shared.sequence.load_tail(Ordering::Relaxed);
-        let count = SequenceController::available_read_from(self.cached_head, tail);
-        if count == 0 {
-            // Refresh shadow head from producer
-            self.cached_head = self.shared.sequence.load_head(Ordering::Acquire);
-            SequenceController::available_read_from(self.cached_head, tail)
-        } else {
-            count
-        }
+        let current_head = self.shared.sequence.load_head(Ordering::Acquire);
+        self.cached_head = current_head;
+        SequenceController::available_read_from(current_head, tail)
     }
 
     /// Leases a contiguous slice of committed bytes for zero-copy reading.
@@ -141,12 +132,9 @@ impl<S: StorageBackend> Consumer<S> {
     /// If backed by `MirroredStorage`, the granted slice is NEVER truncated at the ring wrap-around boundary.
     pub fn grant(&mut self) -> Option<ReadGrant<'_>> {
         let tail = self.shared.sequence.load_tail(Ordering::Relaxed);
-
-        let mut available = SequenceController::available_read_from(self.cached_head, tail);
-        if available == 0 {
-            self.cached_head = self.shared.sequence.load_head(Ordering::Acquire);
-            available = SequenceController::available_read_from(self.cached_head, tail);
-        }
+        let current_head = self.shared.sequence.load_head(Ordering::Acquire);
+        self.cached_head = current_head;
+        let available = SequenceController::available_read_from(current_head, tail);
 
         if available == 0 {
             return None;
@@ -172,11 +160,7 @@ impl<S: StorageBackend> Consumer<S> {
             core::slice::from_raw_parts(base.add(tail_idx), contiguous_len)
         };
 
-        let seq_ref = &self.shared.sequence;
-        Some(ReadGrant::new(slice, move |committed| {
-            let cur = seq_ref.load_tail(Ordering::Relaxed);
-            seq_ref.store_tail(cur.wrapping_add(committed), Ordering::Release);
-        }))
+        Some(ReadGrant::new(slice, &self.shared.sequence))
     }
 
     /// Reads committed bytes into `dst`.
