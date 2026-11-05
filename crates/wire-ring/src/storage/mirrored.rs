@@ -267,7 +267,7 @@ mod linux_impl {
         }
 
         unsafe {
-            let name = b"wire_ring_mirrored\0".as_ptr() as *const i8;
+            let name = c"wire_ring_mirrored".as_ptr();
             let fd = memfd_create(name, MFD_CLOEXEC);
             if fd < 0 {
                 return Err(MemoryError::OsError(
