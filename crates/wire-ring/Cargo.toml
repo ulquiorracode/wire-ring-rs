@@ -1,0 +1,18 @@
+[package]
+name = "wire-ring"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+authors.workspace = true
+repository.workspace = true
+description = "Ultra-high performance, zero-allocation virtual mirrored ring buffer with unbreakable contiguous slice guarantees for Network & IPC"
+
+[dependencies]
+wire-ring-core = { workspace = true }
+zerocopy = { workspace = true, optional = true }
+
+[features]
+default = ["std"]
+std = ["wire-ring-core/alloc"]
+zero-copy = ["dep:zerocopy"]
