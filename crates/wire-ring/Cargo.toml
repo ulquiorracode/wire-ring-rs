@@ -13,7 +13,7 @@ wire-ring-core = { workspace = true }
 zerocopy = { workspace = true, optional = true }
 
 [dev-dependencies]
-crc32fast = { workspace = true }
+silicon-kit = { workspace = true }
 
 [features]
 default = ["std"]

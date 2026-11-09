@@ -1,4 +1,4 @@
-use crc32fast::Hasher;
+use silicon_kit::crc32::crc32c;
 use std::panic::{AssertUnwindSafe, catch_unwind};
 use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, Ordering};
@@ -148,9 +148,7 @@ fn test_cross_boundary_fuzzing_with_crc32() {
         }
 
         // Compute CRC32
-        let mut hasher = Hasher::new();
-        hasher.update(&data[..size]);
-        let crc = hasher.finalize();
+        let crc = crc32c(&data[..size]);
         data[size..size + 4].copy_from_slice(&crc.to_le_bytes());
 
         // Write
@@ -172,9 +170,7 @@ fn test_cross_boundary_fuzzing_with_crc32() {
         assert!(read_grant.len() >= data.len());
         let read_slice = &read_grant[..data.len()];
 
-        let mut read_hasher = Hasher::new();
-        read_hasher.update(&read_slice[..size]);
-        let actual_crc = read_hasher.finalize();
+        let actual_crc = crc32c(&read_slice[..size]);
         let expected_crc = u32::from_le_bytes(read_slice[size..size + 4].try_into().unwrap());
         assert_eq!(
             actual_crc, expected_crc,
