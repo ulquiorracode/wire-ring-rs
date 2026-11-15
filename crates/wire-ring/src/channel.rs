@@ -4,7 +4,7 @@ use crate::grant::{ReadGrant, WriteGrant};
 use crate::storage::StorageBackend;
 use core::cell::UnsafeCell;
 use core::sync::atomic::Ordering;
-use std::sync::Arc;
+use alloc::sync::Arc;
 use wire_ring_core::SequenceController;
 
 struct SharedRing<S> {

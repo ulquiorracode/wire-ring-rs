@@ -16,6 +16,8 @@ zerocopy = { workspace = true, optional = true }
 silicon-kit = { workspace = true }
 
 [features]
-default = ["std"]
-std = ["wire-ring-core/alloc"]
+default = ["std", "builder"]
+std = ["alloc", "wire-ring-core/alloc"]
+alloc = ["wire-ring-core/alloc"]
+builder = ["alloc"]
 zero-copy = ["dep:zerocopy"]
