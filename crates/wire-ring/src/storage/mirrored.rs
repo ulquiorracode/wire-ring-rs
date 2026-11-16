@@ -391,7 +391,12 @@ impl Drop for MirroredStorage {
 }
 
 #[cfg(feature = "std")]
-impl StorageBackend for MirroredStorage {
+// SAFETY:
+// - capacity is verified to be a power of two in new().
+// - ptr points to a 2 * capacity virtual memory region where both halves map to the same physical memory.
+// - as_mut_ptr(&self) returns ptr without taking &mut self.
+// - is_mirrored() returns true as guaranteed by hardware MMU mapping.
+unsafe impl StorageBackend for MirroredStorage {
     #[inline(always)]
     fn capacity(&self) -> usize {
         self.capacity
@@ -403,7 +408,7 @@ impl StorageBackend for MirroredStorage {
     }
 
     #[inline(always)]
-    fn as_mut_ptr(&mut self) -> *mut u8 {
+    fn as_mut_ptr(&self) -> *mut u8 {
         self.ptr
     }
 

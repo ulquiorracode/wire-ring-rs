@@ -24,7 +24,11 @@ impl HeapStorage {
     }
 }
 
-impl StorageBackend for HeapStorage {
+// SAFETY:
+// - capacity is verified to be a power of two in new().
+// - as_ptr and as_mut_ptr point to a valid, heap-allocated Vec<u8> of length capacity.
+// - as_mut_ptr(&self) returns the base pointer without creating a &mut borrow to self.
+unsafe impl StorageBackend for HeapStorage {
     #[inline(always)]
     fn capacity(&self) -> usize {
         self.capacity
@@ -36,8 +40,8 @@ impl StorageBackend for HeapStorage {
     }
 
     #[inline(always)]
-    fn as_mut_ptr(&mut self) -> *mut u8 {
-        self.buffer.as_mut_ptr()
+    fn as_mut_ptr(&self) -> *mut u8 {
+        self.buffer.as_ptr() as *mut u8
     }
 
     #[inline(always)]

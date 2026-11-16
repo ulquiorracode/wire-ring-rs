@@ -3,17 +3,13 @@
 use crate::grant::{ReadGrant, WriteGrant};
 use crate::storage::StorageBackend;
 use alloc::sync::Arc;
-use core::cell::UnsafeCell;
 use core::sync::atomic::Ordering;
 use wire_ring_core::SequenceController;
 
 struct SharedRing<S> {
-    storage: UnsafeCell<S>,
+    storage: S,
     sequence: SequenceController,
 }
-
-// SAFETY: Synchronization of non-overlapping read/write slices is enforced via SequenceController (SPSC Acquire/Release).
-unsafe impl<S: StorageBackend + Send> Sync for SharedRing<S> {}
 
 /// Producer half of the ring buffer.
 pub struct Producer<S> {
@@ -22,7 +18,7 @@ pub struct Producer<S> {
 }
 
 // SAFETY: Producer has sole authority to write to the uncommitted head region.
-unsafe impl<S: StorageBackend + Send> Send for Producer<S> {}
+unsafe impl<S: StorageBackend> Send for Producer<S> {}
 
 impl<S: StorageBackend> Producer<S> {
     /// Returns the total usable capacity of the ring.
@@ -66,7 +62,7 @@ impl<S: StorageBackend> Producer<S> {
         let head_idx = self.shared.sequence.index_of(head);
 
         // If not mirrored, we must bound to end of physical buffer
-        let contiguous_len = if unsafe { (*self.shared.storage.get()).is_mirrored() } {
+        let contiguous_len = if self.shared.storage.is_mirrored() {
             grant_len
         } else {
             grant_len.min(cap - head_idx)
@@ -76,10 +72,10 @@ impl<S: StorageBackend> Producer<S> {
             return None;
         }
 
-        // SAFETY: The producer uniquely writes to [head .. head + contiguous_len].
-        // Storage is held in an UnsafeCell and the consumer has committed past this region with Acquire/Release.
+        // SAFETY: The producer uniquely writes to [head_idx .. head_idx + contiguous_len].
+        // SequenceController enforces that the consumer has committed past this region with Acquire/Release.
         let slice = unsafe {
-            let base = (*self.shared.storage.get()).as_mut_ptr();
+            let base = self.shared.storage.as_mut_ptr();
             core::slice::from_raw_parts_mut(base.add(head_idx), contiguous_len)
         };
 
@@ -112,7 +108,7 @@ pub struct Consumer<S> {
 }
 
 // SAFETY: Consumer has sole authority to read from the committed tail region.
-unsafe impl<S: StorageBackend + Send> Send for Consumer<S> {}
+unsafe impl<S: StorageBackend> Send for Consumer<S> {}
 
 impl<S: StorageBackend> Consumer<S> {
     /// Returns the total usable capacity of the ring.
@@ -149,7 +145,7 @@ impl<S: StorageBackend> Consumer<S> {
         let cap = self.shared.sequence.capacity();
         let tail_idx = self.shared.sequence.index_of(tail);
 
-        let contiguous_len = if unsafe { (*self.shared.storage.get()).is_mirrored() } {
+        let contiguous_len = if self.shared.storage.is_mirrored() {
             available.min(cap)
         } else {
             available.min(cap - tail_idx)
@@ -159,10 +155,10 @@ impl<S: StorageBackend> Consumer<S> {
             return None;
         }
 
-        // SAFETY: The consumer uniquely reads from [tail .. tail + contiguous_len].
-        // Storage is accessed via UnsafeCell and producer has committed bytes with Release ordering.
+        // SAFETY: The consumer uniquely reads from [tail_idx .. tail_idx + contiguous_len].
+        // Storage is accessed via shared reference and producer has committed bytes with Release ordering.
         let slice = unsafe {
-            let base = (*self.shared.storage.get()).as_ptr();
+            let base = self.shared.storage.as_ptr();
             core::slice::from_raw_parts(base.add(tail_idx), contiguous_len)
         };
 
@@ -192,7 +188,7 @@ impl<S: StorageBackend> Consumer<S> {
 pub fn split_ring<S: StorageBackend>(storage: S) -> (Producer<S>, Consumer<S>) {
     let capacity = storage.capacity();
     let shared = Arc::new(SharedRing {
-        storage: UnsafeCell::new(storage),
+        storage,
         sequence: SequenceController::new(capacity),
     });
 

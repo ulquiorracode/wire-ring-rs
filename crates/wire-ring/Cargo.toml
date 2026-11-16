@@ -21,3 +21,7 @@ std = ["alloc", "wire-ring-core/alloc"]
 alloc = ["wire-ring-core/alloc"]
 builder = ["alloc"]
 zero-copy = ["dep:zerocopy"]
+
+[[test]]
+name = "integration_tests"
+required-features = ["std", "builder"]
