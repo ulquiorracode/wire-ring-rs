@@ -22,8 +22,8 @@ pub use builder::{RingBuilder, RingError};
 pub use channel::{Consumer, Producer, split_ring};
 pub use grant::{ReadGrant, WriteGrant};
 pub use presets::Ring;
-pub use storage::{MemoryError, StaticStorage, StorageBackend};
 #[cfg(feature = "alloc")]
 pub use storage::HeapStorage;
 #[cfg(feature = "std")]
 pub use storage::MirroredStorage;
+pub use storage::{MemoryError, StaticStorage, StorageBackend};

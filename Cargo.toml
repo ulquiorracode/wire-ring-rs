@@ -20,7 +20,7 @@ categories = ["data-structures", "network-programming", "concurrency", "no-std"]
 [workspace.dependencies]
 wire-ring-core = { path = "crates/wire-ring-core", default-features = false }
 wire-ring = { path = "crates/wire-ring", default-features = false }
-silicon-kit = { path = "../silicon-kit-rs", default-features = false, features = ["crc32"] }
+silicon-kit = { git = "https://github.com/ulquiorracode/silicon-kit-rs.git", branch = "dev", default-features = false, features = ["crc32"] }
 zerocopy = { version = "0.8", default-features = false, features = ["derive"] }
 criterion = { version = "0.8", default-features = false }
 rtrb = "0.3"
