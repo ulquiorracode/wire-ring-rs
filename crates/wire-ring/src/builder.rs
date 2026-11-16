@@ -1,7 +1,11 @@
 //! Fluent builder for configuring and constructing wire-ring instances.
 
 use crate::channel::{Consumer, Producer, split_ring};
-use crate::storage::{HeapStorage, MemoryError, MirroredStorage};
+#[cfg(feature = "alloc")]
+use crate::storage::HeapStorage;
+use crate::storage::MemoryError;
+#[cfg(feature = "std")]
+use crate::storage::MirroredStorage;
 
 /// Construction errors for `RingBuilder`.
 #[derive(Debug)]
@@ -24,7 +28,7 @@ impl core::fmt::Display for RingError {
     }
 }
 
-impl std::error::Error for RingError {}
+impl core::error::Error for RingError {}
 
 impl From<MemoryError> for RingError {
     fn from(err: MemoryError) -> Self {
@@ -71,6 +75,7 @@ impl RingBuilder {
     }
 
     /// Builds a heap-backed ring.
+    #[cfg(feature = "alloc")]
     pub fn build_heap(self) -> Result<(Producer<HeapStorage>, Consumer<HeapStorage>), RingError> {
         if !self.capacity.is_power_of_two() {
             return Err(RingError::InvalidCapacity(self.capacity));
@@ -80,6 +85,7 @@ impl RingBuilder {
     }
 
     /// Builds an MMU-mirrored virtual ring.
+    #[cfg(feature = "std")]
     pub fn build_mirrored(
         self,
     ) -> Result<(Producer<MirroredStorage>, Consumer<MirroredStorage>), RingError> {

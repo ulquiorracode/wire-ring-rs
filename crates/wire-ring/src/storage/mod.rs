@@ -1,11 +1,15 @@
 //! Storage backend abstraction and implementations for wire-ring.
 
+#[cfg(feature = "alloc")]
 pub mod heap;
 pub mod mirrored;
 pub mod static_slice;
 
+#[cfg(feature = "alloc")]
 pub use heap::HeapStorage;
-pub use mirrored::{MemoryError, MirroredStorage};
+pub use mirrored::MemoryError;
+#[cfg(feature = "std")]
+pub use mirrored::MirroredStorage;
 pub use static_slice::StaticStorage;
 
 /// Trait defining the backing memory region for a ring buffer.

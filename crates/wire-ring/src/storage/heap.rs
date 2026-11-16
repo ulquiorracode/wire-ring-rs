@@ -1,7 +1,8 @@
 //! Heap-allocated standard storage fallback.
 
 use crate::storage::StorageBackend;
-use std::vec::Vec;
+use alloc::vec;
+use alloc::vec::Vec;
 
 /// Standard heap-allocated ring storage.
 pub struct HeapStorage {

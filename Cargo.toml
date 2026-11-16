@@ -7,7 +7,7 @@ members = [
 ]
 
 [workspace.package]
-version = "0.1.0"
+version = "0.2.0"
 edition = "2024"
 rust-version = "1.85"
 license = "MIT OR Apache-2.0"
@@ -20,9 +20,9 @@ categories = ["data-structures", "network-programming", "concurrency", "no-std"]
 [workspace.dependencies]
 wire-ring-core = { path = "crates/wire-ring-core", default-features = false }
 wire-ring = { path = "crates/wire-ring", default-features = false }
+silicon-kit = { git = "https://github.com/ulquiorracode/silicon-kit-rs.git", branch = "dev", default-features = false, features = ["crc32"] }
 zerocopy = { version = "0.8", default-features = false, features = ["derive"] }
 criterion = { version = "0.8", default-features = false }
-crc32fast = { version = "1.4", default-features = false }
 rtrb = "0.3"
 bbqueue = "0.5"
 bytes = "1.10"

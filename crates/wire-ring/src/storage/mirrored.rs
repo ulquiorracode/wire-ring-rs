@@ -8,6 +8,7 @@
 //! This guarantees that any slice of length $\le C$ starting at any offset $idx \in [0, C)$
 //! is ALWAYS contiguous in virtual memory without wrap-around splits.
 
+#[cfg(feature = "std")]
 use crate::storage::StorageBackend;
 
 /// Operating system error during virtual memory mapping.
@@ -36,9 +37,10 @@ impl core::fmt::Display for MemoryError {
     }
 }
 
-impl std::error::Error for MemoryError {}
+impl core::error::Error for MemoryError {}
 
 /// Virtual Mirrored Memory Storage.
+#[cfg(feature = "std")]
 pub struct MirroredStorage {
     ptr: *mut u8,
     capacity: usize,
@@ -47,10 +49,12 @@ pub struct MirroredStorage {
 }
 
 // SAFETY: MirroredStorage owns the unique virtual memory mappings and can be transferred across threads.
+#[cfg(feature = "std")]
 unsafe impl Send for MirroredStorage {}
+#[cfg(feature = "std")]
 unsafe impl Sync for MirroredStorage {}
 
-#[cfg(target_os = "windows")]
+#[cfg(all(feature = "std", target_os = "windows"))]
 mod windows_impl {
     use super::*;
     use core::ffi::c_void;
@@ -236,7 +240,7 @@ mod windows_impl {
     }
 }
 
-#[cfg(target_os = "linux")]
+#[cfg(all(feature = "std", target_os = "linux"))]
 mod linux_impl {
     use super::*;
     use core::ffi::c_void;
@@ -360,6 +364,7 @@ mod linux_impl {
     }
 }
 
+#[cfg(feature = "std")]
 impl MirroredStorage {
     /// Allocates a new hardware MMU-mirrored storage region.
     pub fn new(capacity: usize) -> Result<Self, MemoryError> {
@@ -374,6 +379,7 @@ impl MirroredStorage {
     }
 }
 
+#[cfg(feature = "std")]
 impl Drop for MirroredStorage {
     fn drop(&mut self) {
         #[cfg(target_os = "windows")]
@@ -384,6 +390,7 @@ impl Drop for MirroredStorage {
     }
 }
 
+#[cfg(feature = "std")]
 impl StorageBackend for MirroredStorage {
     #[inline(always)]
     fn capacity(&self) -> usize {

@@ -13,9 +13,11 @@ wire-ring-core = { workspace = true }
 zerocopy = { workspace = true, optional = true }
 
 [dev-dependencies]
-crc32fast = { workspace = true }
+silicon-kit = { workspace = true }
 
 [features]
-default = ["std"]
-std = ["wire-ring-core/alloc"]
+default = ["std", "builder"]
+std = ["alloc", "wire-ring-core/alloc"]
+alloc = ["wire-ring-core/alloc"]
+builder = ["alloc"]
 zero-copy = ["dep:zerocopy"]

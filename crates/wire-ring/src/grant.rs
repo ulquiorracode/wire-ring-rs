@@ -15,7 +15,7 @@ pub struct ReadGrant<'a> {
 impl<'a> ReadGrant<'a> {
     /// Creates a new read grant.
     #[inline(always)]
-    pub(crate) fn new(slice: &'a [u8], seq: &'a SequenceController) -> Self {
+    pub fn new(slice: &'a [u8], seq: &'a SequenceController) -> Self {
         Self { slice, seq }
     }
 
@@ -80,7 +80,7 @@ pub struct WriteGrant<'a> {
 impl<'a> WriteGrant<'a> {
     /// Creates a new write grant.
     #[inline(always)]
-    pub(crate) fn new(slice: &'a mut [u8], seq: &'a SequenceController) -> Self {
+    pub fn new(slice: &'a mut [u8], seq: &'a SequenceController) -> Self {
         Self { slice, seq }
     }
 
