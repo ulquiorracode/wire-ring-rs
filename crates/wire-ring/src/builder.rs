@@ -77,6 +77,9 @@ impl RingBuilder {
     /// Builds a heap-backed ring.
     #[cfg(feature = "alloc")]
     pub fn build_heap(self) -> Result<(Producer<HeapStorage>, Consumer<HeapStorage>), RingError> {
+        if self.mirrored {
+            return Err(RingError::Memory(MemoryError::UnsupportedPlatform));
+        }
         if !self.capacity.is_power_of_two() {
             return Err(RingError::InvalidCapacity(self.capacity));
         }
