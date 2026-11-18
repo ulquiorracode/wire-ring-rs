@@ -15,6 +15,7 @@ Ultra-high performance, zero-allocation virtual mirrored byte ring buffer with u
 - **Scrooge Mechanical Sympathy**: 64-byte L1D cache-line padding and local shadow pointers reduce cross-core atomic snooping by >95%.
 - **RAII Transaction Grants**: `WriteGrant` and `ReadGrant` ensure panic-safe operations with automatic rollback if dropped without `commit()`.
 - **Platform Native**: Direct OS virtual memory APIs on Windows (`VirtualAlloc2` / `MapViewOfFile3`) and Linux (`memfd_create` / `mmap`).
+- **`#![no_std]` & `alloc` Support**: Core sequence and static ring abstractions work without OS or allocator (`#![no_std]`). Split SPSC channel handles require `feature = "alloc"` (default). Hardware MMU mirroring requires `feature = "std"`.
 
 ---
 

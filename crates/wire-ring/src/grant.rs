@@ -25,17 +25,18 @@ impl<'a> ReadGrant<'a> {
     /// # Panics
     /// Panics if `count > self.len()`.
     #[inline]
-    pub fn commit(self, count: usize) {
-        assert!(
-            count <= self.slice.len(),
-            "commit count exceeds leased slice length"
-        );
-        let cur = self.seq.load_tail(core::sync::atomic::Ordering::Relaxed);
-        self.seq.store_tail(
+    pub fn commit(mut self, count: usize) {
+        let max_len = self.slice.len();
+        assert!(count <= max_len, "commit count exceeds leased slice length");
+        let seq = self.seq;
+        self.slice = &[];
+        core::mem::forget(self);
+
+        let cur = seq.load_tail(core::sync::atomic::Ordering::Relaxed);
+        seq.store_tail(
             cur.wrapping_add(count),
             core::sync::atomic::Ordering::Release,
         );
-        core::mem::forget(self);
     }
 
     /// Commits the entire leased slice.
@@ -91,17 +92,18 @@ impl<'a> WriteGrant<'a> {
     /// # Panics
     /// Panics if `count > self.len()`.
     #[inline]
-    pub fn commit(self, count: usize) {
-        assert!(
-            count <= self.slice.len(),
-            "commit count exceeds leased slice length"
-        );
-        let cur = self.seq.load_head(core::sync::atomic::Ordering::Relaxed);
-        self.seq.store_head(
+    pub fn commit(mut self, count: usize) {
+        let max_len = self.slice.len();
+        assert!(count <= max_len, "commit count exceeds leased slice length");
+        let seq = self.seq;
+        self.slice = &mut [];
+        core::mem::forget(self);
+
+        let cur = seq.load_head(core::sync::atomic::Ordering::Relaxed);
+        seq.store_head(
             cur.wrapping_add(count),
             core::sync::atomic::Ordering::Release,
         );
-        core::mem::forget(self);
     }
 
     /// Commits the entire leased slice.
